@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::utils::{self, get_network_id};
+use crate::utils::GATEWAY_API_BASE_URL;
 
 #[derive(Serialize, Deserialize)]
 struct GatewayStatus {
@@ -14,7 +14,7 @@ struct LedgerState {
 
 pub async fn get_epoch() -> reqwest::Result<u64> {
     Ok(reqwest::Client::new()
-        .post(format!("{}/status/gateway-status", utils::get_network_gateway_url(get_network_id())))
+        .post(format!("{}/status/gateway-status", GATEWAY_API_BASE_URL))
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46")
         .send()
         .await

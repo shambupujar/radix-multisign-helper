@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::utils::{self, get_network_id};
+use crate::utils::GATEWAY_API_BASE_URL;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PreviewRequest {
@@ -39,7 +39,7 @@ pub struct Receipt {
 pub async fn txn_preview(preview_request: PreviewRequest) -> Result<PreviewResponse, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client
-        .post(format!("{}/transaction/preview", utils::get_network_gateway_url(get_network_id())))
+        .post(format!("{}/transaction/preview", GATEWAY_API_BASE_URL))
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46")
         .json(&preview_request)
         .send()

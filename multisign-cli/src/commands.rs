@@ -59,32 +59,28 @@ fn validate_public_key(input: &str) -> Result<Validation, inquire::CustomUserErr
 }
 
 
-/// Create a validator for private key input based on key type
-#[allow(dead_code)]
-fn create_private_key_validator(key_type: &str) -> Box<dyn Fn(&str) -> Result<Validation, inquire::CustomUserError>> {
-    let key_type = key_type.to_string();
-    Box::new(move |input: &str| {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return Ok(Validation::Invalid("Private key cannot be empty".into()));
-        }
-        match hex::decode(trimmed) {
-            Ok(bytes) => {
-                let expected_len = match key_type.as_str() {
-                    "Ed25519" => 32,
-                    "Secp256k1" => 32,
-                    _ => return Ok(Validation::Invalid("Unknown key type".into()))
-                };
-                if bytes.len() == expected_len {
-                    Ok(Validation::Valid)
-                } else {
-                    Ok(Validation::Invalid(format!("{} private key must be {} bytes ({} hex characters)", 
-                        key_type, expected_len, expected_len * 2).into()))
-                }
-            },
-            Err(_) => Ok(Validation::Invalid("Invalid hex format".into()))
-        }
-    })
+/// Validate private key input based on key type
+fn validate_private_key(input: &str, key_type: &str) -> Result<Validation, inquire::CustomUserError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(Validation::Invalid("Private key cannot be empty".into()));
+    }
+    match hex::decode(trimmed) {
+        Ok(bytes) => {
+            let expected_len = match key_type {
+                "Ed25519" => 32,
+                "Secp256k1" => 32,
+                _ => return Ok(Validation::Invalid("Unknown key type".into()))
+            };
+            if bytes.len() == expected_len {
+                Ok(Validation::Valid)
+            } else {
+                Ok(Validation::Invalid(format!("{} private key must be {} bytes ({} hex characters)", 
+                    key_type, expected_len, expected_len * 2).into()))
+            }
+        },
+        Err(_) => Ok(Validation::Invalid("Invalid hex format".into()))
+    }
 }
 
 pub fn prepare_intent_hash() -> Result<()> {
@@ -111,8 +107,9 @@ pub fn prepare_intent_hash() -> Result<()> {
         .context("Failed to select signer key type")?;
 
     // Get signer private key
+    let signer_key_type_clone = signer_key_type.to_string();
     let private_key_input = Text::new(&format!("Enter your signer private key (hex format, {} 32 bytes):", signer_key_type))
-        .with_validator(create_private_key_validator(signer_key_type))
+        .with_validator(move |input: &str| validate_private_key(input, &signer_key_type_clone))
         .prompt()
         .context("Failed to get signer private key")?;
 
@@ -123,8 +120,9 @@ pub fn prepare_intent_hash() -> Result<()> {
         .context("Failed to select notary key type")?;
 
     // Get notary private key
+    let notary_key_type_clone = notary_key_type.to_string();
     let notary_private_key_input = Text::new(&format!("Enter the notary private key (hex format, {} 32 bytes):", notary_key_type))
-        .with_validator(create_private_key_validator(notary_key_type))
+        .with_validator(move |input: &str| validate_private_key(input, &notary_key_type_clone))
         .prompt()
         .context("Failed to get notary private key")?;
 
@@ -164,6 +162,9 @@ pub fn prepare_intent_hash() -> Result<()> {
 
     let manifest = compile(&manifest_content, &network_definition, BlobProvider::new())
         .map_err(|e| anyhow::anyhow!("Failed to compile manifest: {:?}", e))?;
+
+    let notary_key_bytes = hex::decode(notary_public_key_input.trim())
+        .context("Failed to decode notary public key")?;
 
     let notary_public_key = match notary_key_type {
         "Ed25519" => {
@@ -262,8 +263,9 @@ pub fn sign_intent_hash() -> Result<()> {
         .context("Failed to select key type")?;
 
     // Get private key
+    let key_type_clone = key_type.to_string();
     let private_key_input = Text::new(&format!("Enter your private key (hex format, {} 32 bytes):", key_type))
-        .with_validator(create_private_key_validator(key_type))
+        .with_validator(move |input: &str| validate_private_key(input, &key_type_clone))
         .prompt()
         .context("Failed to get private key")?;
 
