@@ -121,24 +121,6 @@ pub async fn prepare_intent_hash() -> Result<()> {
             .prompt()
             .context("Failed to get notary public key")?;
 
-    // Get signer key type
-    let signer_key_types = vec!["Ed25519", "Secp256k1"];
-    let signer_key_type =
-        Select::new("Select signer key type:", signer_key_types)
-            .prompt()
-            .context("Failed to select signer key type")?;
-
-    // Get signer private key
-    let signer_key_type_clone = signer_key_type.to_string();
-    let private_key_input = Text::new(&format!(
-        "Enter your signer private key (hex format, {} 32 bytes):",
-        signer_key_type
-    ))
-    .with_validator(move |input: &str| {
-        validate_private_key(input, &signer_key_type_clone)
-    })
-    .prompt()
-    .context("Failed to get signer private key")?;
 
     // Get notary key type
     let notary_key_types = vec!["Ed25519", "Secp256k1"];
@@ -159,6 +141,26 @@ pub async fn prepare_intent_hash() -> Result<()> {
     .prompt()
     .context("Failed to get notary private key")?;
 
+
+    // Get signer key type
+    let signer_key_types = vec!["Ed25519", "Secp256k1"];
+    let signer_key_type =
+        Select::new("Select signer key type:", signer_key_types)
+            .prompt()
+            .context("Failed to select signer key type")?;
+
+    // Get signer private key
+    let signer_key_type_clone = signer_key_type.to_string();
+    let private_key_input = Text::new(&format!(
+        "Enter your signer private key (hex format, {} 32 bytes):",
+        signer_key_type
+    ))
+    .with_validator(move |input: &str| {
+        validate_private_key(input, &signer_key_type_clone)
+    })
+    .prompt()
+    .context("Failed to get signer private key")?;
+    
     // Parse private keys using the reusable function
     let _signer_private_key =
         parse_private_key(&private_key_input, signer_key_type)?;
@@ -260,12 +262,37 @@ pub async fn prepare_intent_hash() -> Result<()> {
         .transaction_intent_hash();
     let intent_hash_hex = hex::encode(intent_hash.0);
 
+
+    let network_definition = NetworkDefinition::mainnet();
+
+    let notarized_transaction = NotarizedTransactionV1 {
+        signed_intent: SignedIntentV1 {
+            intent,
+            intent_signatures: IntentSignaturesV1 {
+                signatures: vec![],
+            },
+        },
+        notary_signature: NotarySignatureV1(SignatureV1::Ed25519(Ed25519Signature([0u8; 64]))),
+    };
+    let transaction_intent = notarized_transaction.signed_intent
+    .prepare(&PreparationSettings::latest())
+    .unwrap()
+    .transaction_intent_hash();
+
+    let transaction_hash_encoder =
+                    TransactionHashBech32Encoder::new(&network_definition);
+    let transaction_id =
+                    transaction_hash_encoder.encode(&transaction_intent).unwrap();
+
+
+
     // For now, just create a placeholder for transaction construction
     // In production, this would use the proper transaction building flow
     println!("⚠️  Note: Full transaction construction not implemented in this function.");
     println!(
         "   Use the 'submit-trxn' command for complete transaction assembly."
     );
+    println!("  Transaction ID: {}", transaction_id);
 
     println!("✅ Intent Hash Generated Successfully!");
     println!();
