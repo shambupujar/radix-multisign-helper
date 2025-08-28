@@ -1,12 +1,19 @@
 use anyhow::{Context, Result};
+use gateway_api::get_epoch;
 use inquire::{validator::Validation, Select, Text};
 use radix_transactions::manifest::{compile, BlobProvider};
 use radix_transactions::prelude::*;
 use scrypto::prelude::*;
 use std::fs;
 use std::path::Path;
-use gateway_api::get_epoch;
 
+fn get_network_definition(network_id: u8) -> NetworkDefinition {
+    match network_id {
+        1 => NetworkDefinition::mainnet(),
+        2 => NetworkDefinition::stokenet(),
+        _ => NetworkDefinition::simulator(),
+    }
+}
 /// Parse a private key from hex string based on key type
 fn parse_private_key(hex_str: &str, key_type: &str) -> Result<PrivateKey> {
     let private_key_bytes =
@@ -107,20 +114,48 @@ pub async fn prepare_intent_hash() -> Result<()> {
     println!("📝 Preparing Intent Hash from Transaction Manifest");
     println!();
 
-    // Get manifest file path
-    let manifest_path =
-        Text::new("Enter the path to the transaction manifest file (.rtm):")
-            .with_validator(validate_rtm_file_path)
-            .prompt()
-            .context("Failed to get manifest path")?;
+    let (notary_public_key, notary_public_key_input, _) =
+        ask_notary_details(false).unwrap();
 
+    let (intent, intent_hash_hex, network_definition, current_epoch) =
+        ask_trxn_details(notary_public_key).await?;
+
+    let signed_intent = SignedIntentV1 {
+        intent,
+        intent_signatures: IntentSignaturesV1 { signatures: vec![] },
+    };
+
+    let transaction_intent = signed_intent
+        .prepare(&PreparationSettings::latest())
+        .unwrap()
+        .transaction_intent_hash();
+
+    let transaction_hash_encoder =
+        TransactionHashBech32Encoder::new(&network_definition);
+    let transaction_id = transaction_hash_encoder
+        .encode(&transaction_intent)
+        .unwrap();
+
+    println!("  Transaction ID: {}", transaction_id);
+
+    println!("  Intent Hash: {}", intent_hash_hex);
+    println!("  Notary Public Key: {}", notary_public_key_input.trim());
+    println!("  Current Epoch: {}", current_epoch);
+    println!();
+    println!("💡 Save this details including intent hash for signing by the required parties.");
+
+    Ok(())
+}
+
+fn ask_notary_details(
+    ask_private_key: bool,
+) -> Result<(PublicKey, String, Option<PrivateKey>), anyhow::Error> {
     // Get notary public key
     let notary_public_key_input =
         Text::new("Enter the notary public key (hex format):")
             .with_validator(validate_public_key)
             .prompt()
             .context("Failed to get notary public key")?;
-
 
     // Get notary key type
     let notary_key_types = vec!["Ed25519", "Secp256k1"];
@@ -129,83 +164,8 @@ pub async fn prepare_intent_hash() -> Result<()> {
             .prompt()
             .context("Failed to select notary key type")?;
 
-    // Get notary private key
-    let notary_key_type_clone = notary_key_type.to_string();
-    let notary_private_key_input = Text::new(&format!(
-        "Enter the notary private key (hex format, {} 32 bytes):",
-        notary_key_type
-    ))
-    .with_validator(move |input: &str| {
-        validate_private_key(input, &notary_key_type_clone)
-    })
-    .prompt()
-    .context("Failed to get notary private key")?;
-
-
-    // Get signer key type
-    let signer_key_types = vec!["Ed25519", "Secp256k1"];
-    let signer_key_type =
-        Select::new("Select signer key type:", signer_key_types)
-            .prompt()
-            .context("Failed to select signer key type")?;
-
-    // Get signer private key
-    let signer_key_type_clone = signer_key_type.to_string();
-    let private_key_input = Text::new(&format!(
-        "Enter your signer private key (hex format, {} 32 bytes):",
-        signer_key_type
-    ))
-    .with_validator(move |input: &str| {
-        validate_private_key(input, &signer_key_type_clone)
-    })
-    .prompt()
-    .context("Failed to get signer private key")?;
-    
-    // Parse private keys using the reusable function
-    let _signer_private_key =
-        parse_private_key(&private_key_input, signer_key_type)?;
-    let _notary_private_key =
-        parse_private_key(&notary_private_key_input, notary_key_type)?;
-
-    // Get network ID (default to 1)
-    let network_id_str = Text::new("Enter network ID:")
-        .with_default("1")
-        .with_validator(|input: &str| match input.trim().parse::<u8>() {
-            Ok(_) => Ok(Validation::Valid),
-            Err(_) => Ok(Validation::Invalid(
-                "Network ID must be a valid number".into(),
-            )),
-        })
-        .prompt()
-        .context("Failed to get network ID")?;
-
-    let network_id: u8 = network_id_str
-        .trim()
-        .parse()
-        .context("Failed to parse network ID")?;
-
-    println!();
-    println!("🔄 Processing...");
-
-    // Read and compile the manifest
-    let manifest_content = fs::read_to_string(manifest_path.trim())
-        .context("Failed to read manifest file")?;
-
-    let network_definition = match network_id {
-        1 => NetworkDefinition::mainnet(),
-        2 => NetworkDefinition::stokenet(),
-        _ => NetworkDefinition::simulator(),
-    };
-
-    let manifest =
-        compile(&manifest_content, &network_definition, BlobProvider::new())
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to compile manifest: {:?}", e)
-            })?;
-
     let notary_key_bytes = hex::decode(notary_public_key_input.trim())
         .context("Failed to decode notary public key")?;
-
     let notary_public_key = match notary_key_type {
         "Ed25519" => {
             if notary_key_bytes.len() != 32 {
@@ -231,80 +191,118 @@ pub async fn prepare_intent_hash() -> Result<()> {
             return Err(anyhow::anyhow!(
                 "Unknown key type: {}",
                 notary_key_type
-            ))
+            ));
         }
     };
+    match ask_private_key {
+        true => {
+            let private_key_input =
+                Text::new("Enter the notary private key (hex format):")
+                    .with_validator(move |input: &str| {
+                        validate_private_key(input, &notary_key_type)
+                    })
+                    .prompt()
+                    .context("Failed to get notary private key")?;
+            let private_key =
+                parse_private_key(&private_key_input, &notary_key_type)?;
+            return Ok((
+                notary_public_key,
+                notary_public_key_input,
+                Some(private_key),
+            ));
+        }
+        false => Ok((notary_public_key, notary_public_key_input, None)),
+    }
+}
 
-    let current_epoch = get_epoch().await?;
+async fn ask_trxn_details(
+    notary_public_key: PublicKey,
+) -> Result<(IntentV1, String, NetworkDefinition, u64), anyhow::Error> {
+    let network_id_str = Text::new("Enter network ID:")
+        .with_default("1")
+        .with_validator(|input: &str| match input.trim().parse::<u8>() {
+            Ok(_) => Ok(Validation::Valid),
+            Err(_) => Ok(Validation::Invalid(
+                "Network ID must be a valid number".into(),
+            )),
+        })
+        .prompt()
+        .context("Failed to get network ID")?;
+
+    let network_id: u8 = network_id_str
+        .trim()
+        .parse()
+        .context("Failed to parse network ID")?;
+
+    let network_definition = get_network_definition(network_id);
+
+    let start_epoch = ask_epoch().await?;
+
+    // Get manifest file path
+    let manifest_path =
+        Text::new("Enter the path to the transaction manifest file (.rtm):")
+            .with_validator(validate_rtm_file_path)
+            .prompt()
+            .context("Failed to get manifest path")?;
+    // Read and compile the manifest
+    let manifest_content = fs::read_to_string(manifest_path.trim())
+        .context("Failed to read manifest file")?;
+
+    let manifest =
+        compile(&manifest_content, &network_definition, BlobProvider::new())
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to compile manifest: {:?}", e)
+            })?;
 
     let header = TransactionHeaderV1 {
         network_id,
-        start_epoch_inclusive: Epoch::of(current_epoch),
-        end_epoch_exclusive: Epoch::of(current_epoch + 100),
+        start_epoch_inclusive: Epoch::of(start_epoch),
+        end_epoch_exclusive: Epoch::of(start_epoch + 100),
         nonce: 1,
         notary_public_key,
         notary_is_signatory: false,
         tip_percentage: 0,
     };
-
-    // Create intent
     let intent = IntentV1 {
         header: header.clone(),
         instructions: InstructionsV1(manifest.instructions),
         blobs: manifest.blobs.into(),
         message: MessageV1::None,
     };
-
-    // Calculate intent hash
     let intent_hash = intent
         .prepare(&PreparationSettings::latest())
         .unwrap()
         .transaction_intent_hash();
     let intent_hash_hex = hex::encode(intent_hash.0);
+    Ok((intent, intent_hash_hex, network_definition, start_epoch))
+}
 
-
-    let network_definition = NetworkDefinition::mainnet();
-
-    let notarized_transaction = NotarizedTransactionV1 {
-        signed_intent: SignedIntentV1 {
-            intent,
-            intent_signatures: IntentSignaturesV1 {
-                signatures: vec![],
-            },
-        },
-        notary_signature: NotarySignatureV1(SignatureV1::Ed25519(Ed25519Signature([0u8; 64]))),
+async fn ask_epoch() -> Result<u64, anyhow::Error> {
+    let epoch_input =
+        Text::new("Enter epoch number (leave empty to fetch current epoch):")
+            .with_default("")
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() {
+                    return Ok(Validation::Valid);
+                }
+                match input.trim().parse::<u64>() {
+                    Ok(_) => Ok(Validation::Valid),
+                    Err(_) => Ok(Validation::Invalid(
+                        "Epoch must be a valid number".into(),
+                    )),
+                }
+            })
+            .prompt()
+            .context("Failed to get epoch input")?;
+    let current_epoch = if epoch_input.trim().is_empty() {
+        get_epoch().await?
+    } else {
+        epoch_input
+            .trim()
+            .parse::<u64>()
+            .context("Failed to parse epoch number")?
     };
-    let transaction_intent = notarized_transaction.signed_intent
-    .prepare(&PreparationSettings::latest())
-    .unwrap()
-    .transaction_intent_hash();
-
-    let transaction_hash_encoder =
-                    TransactionHashBech32Encoder::new(&network_definition);
-    let transaction_id =
-                    transaction_hash_encoder.encode(&transaction_intent).unwrap();
-
-
-
-    // For now, just create a placeholder for transaction construction
-    // In production, this would use the proper transaction building flow
-    println!("⚠️  Note: Full transaction construction not implemented in this function.");
-    println!(
-        "   Use the 'submit-trxn' command for complete transaction assembly."
-    );
-    println!("  Transaction ID: {}", transaction_id);
-
-    println!("✅ Intent Hash Generated Successfully!");
-    println!();
-    println!("📋 Results:");
-    println!("  Intent Hash: {}", intent_hash_hex);
-    println!("  Network ID: {}", network_id);
-    println!("  Notary Public Key: {}", notary_public_key_input.trim());
-    println!("  Manifest Path: {}", manifest_path.trim());
-    println!();
-    println!("💡 Save this intent hash for signing by the required parties.");
-
-    Ok(())
+    Ok(current_epoch)
 }
 
 pub fn sign_intent_hash() -> Result<()> {
@@ -403,7 +401,7 @@ pub fn sign_intent_hash() -> Result<()> {
     Ok(())
 }
 
-pub fn submit_transaction() -> Result<()> {
+pub async fn submit_transaction() -> Result<()> {
     println!("🚀 Submit Transaction");
     println!();
 
@@ -427,6 +425,19 @@ pub fn submit_transaction() -> Result<()> {
         })
         .prompt()
         .context("Failed to get intent hash")?;
+
+    let (notary_public_key, notary_public_key_input, notary_private_key) =
+        ask_notary_details(true).unwrap();
+
+    let (intent, intent_hash_hex, network_definition, current_epoch) =
+        ask_trxn_details(notary_public_key).await?;
+
+    println!("Constructed Intent Hash: {}", intent_hash_hex);
+    println!("Passed Intent Hash: {}", intent_hash_input.trim());
+
+    println!("Notary Public Key: {}", notary_public_key_input.trim());
+    println!("Network Definition: {:?}", network_definition);
+    println!("Current Epoch: {}", current_epoch);
 
     // Get number of signers
     let num_signers_str = Text::new("Enter the number of signers:")
@@ -517,70 +528,62 @@ pub fn submit_transaction() -> Result<()> {
         println!();
     }
 
-    // Get notary public key
-    let notary_public_key_input =
-        Text::new("Enter the notary public key (hex format):")
-            .with_validator(validate_public_key)
-            .prompt()
-            .context("Failed to get notary public key")?;
-
     println!();
     println!("🔄 Constructing notarized transaction...");
 
-    // Parse notary public key (Ed25519 only)
-    let notary_key_bytes = hex::decode(notary_public_key_input.trim())
-        .context("Failed to decode notary public key")?;
-
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&notary_key_bytes);
-    let notary_public_key = PublicKey::Ed25519(Ed25519PublicKey(key_bytes));
-
     // Create a minimal intent for transaction reconstruction
     // Note: This is a placeholder since we don't have the original manifest
-    let _network_definition = NetworkDefinition::mainnet(); // Default to mainnet
-
-    let placeholder_intent = IntentV1 {
-        header: TransactionHeaderV1 {
-            network_id: 1, // Default to mainnet
-            start_epoch_inclusive: Epoch::of(1000),
-            end_epoch_exclusive: Epoch::of(1100),
-            nonce: 1,
-            notary_public_key: notary_public_key.clone(),
-            notary_is_signatory: false,
-            tip_percentage: 0,
-        },
-        instructions: InstructionsV1(vec![]), // Placeholder - in real usage would need actual manifest
-        blobs: BlobsV1 { blobs: vec![] },
-        message: MessageV1::None,
-    };
 
     // Create signed intent
     let signed_intent = SignedIntentV1 {
-        intent: placeholder_intent,
+        intent: intent.clone(),
         intent_signatures: IntentSignaturesV1 {
             signatures: intent_signatures,
         },
     };
 
-    // Create placeholder notary signature (in real usage, notary would sign)
-    let placeholder_notary_signature =
-        NotarySignatureV1(SignatureV1::Ed25519(Ed25519Signature([0u8; 64])));
+    // Decode intent hash for notary signing
+    let intent_hash_bytes = hex::decode(intent_hash_input.trim())
+        .context("Failed to decode intent hash for notary signing")?;
+    let mut hash_array = [0u8; 32];
+    hash_array.copy_from_slice(&intent_hash_bytes);
+    let hash = Hash(hash_array);
+
+    let notary_signature = match notary_private_key.unwrap() {
+        PrivateKey::Ed25519(ed25519_key) => {
+            NotarySignatureV1(SignatureV1::Ed25519(ed25519_key.sign(&hash)))
+        }
+        PrivateKey::Secp256k1(secp256k1_key) => {
+            NotarySignatureV1(SignatureV1::Secp256k1(secp256k1_key.sign(&hash)))
+        }
+    };
 
     // Create notarized transaction
     let _notarized_transaction = NotarizedTransactionV1 {
         signed_intent,
-        notary_signature: placeholder_notary_signature,
+        notary_signature,
     };
+
+    let transaction_intent = _notarized_transaction
+        .signed_intent
+        .prepare(&PreparationSettings::latest())
+        .unwrap()
+        .transaction_intent_hash();
+
+    let network_definition = get_network_definition(1);
+
+    let transaction_hash_encoder =
+        TransactionHashBech32Encoder::new(&network_definition);
+    let transaction_id = transaction_hash_encoder
+        .encode(&transaction_intent)
+        .unwrap();
 
     // Calculate transaction ID (this would be the actual transaction hash)
     // For transaction ID, we'll use a simple hash of the structure
-    let transaction_id =
-        format!("tx_{}", hex::encode(&intent_hash_input.trim()[..16]));
 
     println!("✅ Notarized Transaction Constructed Successfully!");
     println!();
     println!("📋 Transaction Summary:");
-    println!("  Intent Hash: {}", intent_hash_input.trim());
     println!("  Number of Signers: {}", num_signers);
     println!("  Notary Public Key: {}", notary_public_key_input.trim());
     println!("  Transaction ID: {}", transaction_id);

@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
                 }
             },
             "submit-trxn" => {
-                if let Err(e) = submit_transaction() {
+                if let Err(e) = submit_transaction().await {
                     eprintln!("Error submitting transaction: {}", e);
                 }
             },
