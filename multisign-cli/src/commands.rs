@@ -279,7 +279,7 @@ async fn ask_trxn_details(
 
 async fn ask_epoch() -> Result<u64, anyhow::Error> {
     let epoch_input =
-        Text::new("Enter epoch number (leave empty to fetch current epoch):")
+        Text::new("Enter epoch number (leave empty to fetch current epoch. If you are submitting a transaction, you should use the epoch of the transaction that was prepared):")
             .with_default("")
             .with_validator(|input: &str| {
                 if input.trim().is_empty() {
