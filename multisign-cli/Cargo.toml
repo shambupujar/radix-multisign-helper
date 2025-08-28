@@ -8,7 +8,7 @@ edition = "2021"
 gateway_api = { path = "../gateway_api" }
 
 # Interactive CLI
-inquire = "0.7"
+inquire = { version = "0.7", features = ["editor"] }
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gateway_api::get_epoch;
-use inquire::{validator::Validation, Password, Select, Text};
+use inquire::{validator::Validation, Editor, Password, Select, Text};
 use radix_transactions::manifest::{compile, BlobProvider};
 use radix_transactions::prelude::*;
 use scrypto::prelude::*;
@@ -238,15 +238,31 @@ async fn ask_trxn_details(
 
     let start_epoch = ask_epoch().await?;
 
-    // Get manifest file path
-    let manifest_path =
-        Text::new("Enter the path to the transaction manifest file (.rtm):")
-            .with_validator(validate_rtm_file_path)
-            .prompt()
-            .context("Failed to get manifest path")?;
-    // Read and compile the manifest
-    let manifest_content = fs::read_to_string(manifest_path.trim())
-        .context("Failed to read manifest file")?;
+    // Get manifest content - either from file or direct input
+    let manifest_input_method = Select::new(
+        "How would you like to provide the transaction manifest?",
+        vec!["From file path", "Paste manifest content directly"]
+    )
+    .prompt()
+    .context("Failed to get manifest input method")?;
+
+    let manifest_content = match manifest_input_method {
+        "From file path" => {
+            let manifest_path = Text::new("Enter the path to the transaction manifest file (.rtm):")
+                .with_validator(validate_rtm_file_path)
+                .prompt()
+                .context("Failed to get manifest path")?;
+            fs::read_to_string(manifest_path.trim())
+                .context("Failed to read manifest file")?
+        },
+        "Paste manifest content directly" => {
+            Editor::new("Enter the transaction manifest content:")
+                .with_predefined_text("# Enter your manifest content here\n# Example:\n# CALL_METHOD\n#     Address(\"component_address\")\n#     \"method_name\";\n")
+                .prompt()
+                .context("Failed to get manifest content")?
+        },
+        _ => return Err(anyhow::anyhow!("Invalid manifest input method"))
+    };
 
     let manifest =
         compile(&manifest_content, &network_definition, BlobProvider::new())
