@@ -4,7 +4,8 @@ use anyhow::Result;
 use commands::{prepare_intent_hash, sign_intent_hash, submit_transaction};
 use inquire::Select;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("🔐 Multisign Helper - Interactive Transaction Signing Tool");
     println!();
 
@@ -22,7 +23,7 @@ fn main() -> Result<()> {
 
         match command {
             "prepare-intent-hash" => {
-                if let Err(e) = prepare_intent_hash() {
+                if let Err(e) = prepare_intent_hash().await {
                     eprintln!("Error preparing intent hash: {}", e);
                 }
             },

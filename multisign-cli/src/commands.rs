@@ -5,29 +5,38 @@ use radix_transactions::prelude::*;
 use scrypto::prelude::*;
 use std::fs;
 use std::path::Path;
+use gateway_api::get_epoch;
 
 /// Parse a private key from hex string based on key type
 fn parse_private_key(hex_str: &str, key_type: &str) -> Result<PrivateKey> {
-    let private_key_bytes = hex::decode(hex_str.trim())
-        .context("Failed to decode private key")?;
+    let private_key_bytes =
+        hex::decode(hex_str.trim()).context("Failed to decode private key")?;
 
     match key_type {
         "Ed25519" => {
             let private_key = Ed25519PrivateKey::from_bytes(&private_key_bytes)
-                .map_err(|e| anyhow::anyhow!("Invalid Ed25519 private key: {:?}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Invalid Ed25519 private key: {:?}", e)
+                })?;
             Ok(PrivateKey::Ed25519(private_key))
-        },
+        }
         "Secp256k1" => {
-            let private_key = Secp256k1PrivateKey::from_bytes(&private_key_bytes)
-                .map_err(|e| anyhow::anyhow!("Invalid Secp256k1 private key: {:?}", e))?;
+            let private_key = Secp256k1PrivateKey::from_bytes(
+                &private_key_bytes,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("Invalid Secp256k1 private key: {:?}", e)
+            })?;
             Ok(PrivateKey::Secp256k1(private_key))
-        },
-        _ => Err(anyhow::anyhow!("Unsupported key type: {}", key_type))
+        }
+        _ => Err(anyhow::anyhow!("Unsupported key type: {}", key_type)),
     }
 }
 
 /// Validate file path for .rtm files
-fn validate_rtm_file_path(input: &str) -> Result<Validation, inquire::CustomUserError> {
+fn validate_rtm_file_path(
+    input: &str,
+) -> Result<Validation, inquire::CustomUserError> {
     if input.trim().is_empty() {
         return Ok(Validation::Invalid("Path cannot be empty".into()));
     }
@@ -41,7 +50,9 @@ fn validate_rtm_file_path(input: &str) -> Result<Validation, inquire::CustomUser
 }
 
 /// Validate public key (supports both Ed25519 and Secp256k1)
-fn validate_public_key(input: &str) -> Result<Validation, inquire::CustomUserError> {
+fn validate_public_key(
+    input: &str,
+) -> Result<Validation, inquire::CustomUserError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Ok(Validation::Invalid("Public key cannot be empty".into()));
@@ -53,14 +64,16 @@ fn validate_public_key(input: &str) -> Result<Validation, inquire::CustomUserErr
             } else {
                 Ok(Validation::Invalid("Public key must be 32 bytes (Ed25519) or 33 bytes (Secp256k1)".into()))
             }
-        },
-        Err(_) => Ok(Validation::Invalid("Invalid hex format".into()))
+        }
+        Err(_) => Ok(Validation::Invalid("Invalid hex format".into())),
     }
 }
 
-
 /// Validate private key input based on key type
-fn validate_private_key(input: &str, key_type: &str) -> Result<Validation, inquire::CustomUserError> {
+fn validate_private_key(
+    input: &str,
+    key_type: &str,
+) -> Result<Validation, inquire::CustomUserError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Ok(Validation::Invalid("Private key cannot be empty".into()));
@@ -70,20 +83,27 @@ fn validate_private_key(input: &str, key_type: &str) -> Result<Validation, inqui
             let expected_len = match key_type {
                 "Ed25519" => 32,
                 "Secp256k1" => 32,
-                _ => return Ok(Validation::Invalid("Unknown key type".into()))
+                _ => return Ok(Validation::Invalid("Unknown key type".into())),
             };
             if bytes.len() == expected_len {
                 Ok(Validation::Valid)
             } else {
-                Ok(Validation::Invalid(format!("{} private key must be {} bytes ({} hex characters)", 
-                    key_type, expected_len, expected_len * 2).into()))
+                Ok(Validation::Invalid(
+                    format!(
+                        "{} private key must be {} bytes ({} hex characters)",
+                        key_type,
+                        expected_len,
+                        expected_len * 2
+                    )
+                    .into(),
+                ))
             }
-        },
-        Err(_) => Ok(Validation::Invalid("Invalid hex format".into()))
+        }
+        Err(_) => Ok(Validation::Invalid("Invalid hex format".into())),
     }
 }
 
-pub fn prepare_intent_hash() -> Result<()> {
+pub async fn prepare_intent_hash() -> Result<()> {
     println!("📝 Preparing Intent Hash from Transaction Manifest");
     println!();
 
@@ -95,40 +115,55 @@ pub fn prepare_intent_hash() -> Result<()> {
             .context("Failed to get manifest path")?;
 
     // Get notary public key
-    let notary_public_key_input = Text::new("Enter the notary public key (hex format):")
-        .with_validator(validate_public_key)
-        .prompt()
-        .context("Failed to get notary public key")?;
+    let notary_public_key_input =
+        Text::new("Enter the notary public key (hex format):")
+            .with_validator(validate_public_key)
+            .prompt()
+            .context("Failed to get notary public key")?;
 
     // Get signer key type
     let signer_key_types = vec!["Ed25519", "Secp256k1"];
-    let signer_key_type = Select::new("Select signer key type:", signer_key_types)
-        .prompt()
-        .context("Failed to select signer key type")?;
+    let signer_key_type =
+        Select::new("Select signer key type:", signer_key_types)
+            .prompt()
+            .context("Failed to select signer key type")?;
 
     // Get signer private key
     let signer_key_type_clone = signer_key_type.to_string();
-    let private_key_input = Text::new(&format!("Enter your signer private key (hex format, {} 32 bytes):", signer_key_type))
-        .with_validator(move |input: &str| validate_private_key(input, &signer_key_type_clone))
-        .prompt()
-        .context("Failed to get signer private key")?;
+    let private_key_input = Text::new(&format!(
+        "Enter your signer private key (hex format, {} 32 bytes):",
+        signer_key_type
+    ))
+    .with_validator(move |input: &str| {
+        validate_private_key(input, &signer_key_type_clone)
+    })
+    .prompt()
+    .context("Failed to get signer private key")?;
 
     // Get notary key type
     let notary_key_types = vec!["Ed25519", "Secp256k1"];
-    let notary_key_type = Select::new("Select notary key type:", notary_key_types)
-        .prompt()
-        .context("Failed to select notary key type")?;
+    let notary_key_type =
+        Select::new("Select notary key type:", notary_key_types)
+            .prompt()
+            .context("Failed to select notary key type")?;
 
     // Get notary private key
     let notary_key_type_clone = notary_key_type.to_string();
-    let notary_private_key_input = Text::new(&format!("Enter the notary private key (hex format, {} 32 bytes):", notary_key_type))
-        .with_validator(move |input: &str| validate_private_key(input, &notary_key_type_clone))
-        .prompt()
-        .context("Failed to get notary private key")?;
+    let notary_private_key_input = Text::new(&format!(
+        "Enter the notary private key (hex format, {} 32 bytes):",
+        notary_key_type
+    ))
+    .with_validator(move |input: &str| {
+        validate_private_key(input, &notary_key_type_clone)
+    })
+    .prompt()
+    .context("Failed to get notary private key")?;
 
     // Parse private keys using the reusable function
-    let _signer_private_key = parse_private_key(&private_key_input, signer_key_type)?;
-    let _notary_private_key = parse_private_key(&notary_private_key_input, notary_key_type)?;
+    let _signer_private_key =
+        parse_private_key(&private_key_input, signer_key_type)?;
+    let _notary_private_key =
+        parse_private_key(&notary_private_key_input, notary_key_type)?;
 
     // Get network ID (default to 1)
     let network_id_str = Text::new("Enter network ID:")
@@ -160,8 +195,11 @@ pub fn prepare_intent_hash() -> Result<()> {
         _ => NetworkDefinition::simulator(),
     };
 
-    let manifest = compile(&manifest_content, &network_definition, BlobProvider::new())
-        .map_err(|e| anyhow::anyhow!("Failed to compile manifest: {:?}", e))?;
+    let manifest =
+        compile(&manifest_content, &network_definition, BlobProvider::new())
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to compile manifest: {:?}", e)
+            })?;
 
     let notary_key_bytes = hex::decode(notary_public_key_input.trim())
         .context("Failed to decode notary public key")?;
@@ -169,24 +207,33 @@ pub fn prepare_intent_hash() -> Result<()> {
     let notary_public_key = match notary_key_type {
         "Ed25519" => {
             if notary_key_bytes.len() != 32 {
-                return Err(anyhow::anyhow!("Ed25519 public key must be 32 bytes"));
+                return Err(anyhow::anyhow!(
+                    "Ed25519 public key must be 32 bytes"
+                ));
             }
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(&notary_key_bytes);
             PublicKey::Ed25519(Ed25519PublicKey(key_bytes))
-        },
+        }
         "Secp256k1" => {
             if notary_key_bytes.len() != 33 {
-                return Err(anyhow::anyhow!("Secp256k1 public key must be 33 bytes"));
+                return Err(anyhow::anyhow!(
+                    "Secp256k1 public key must be 33 bytes"
+                ));
             }
             let mut key_bytes = [0u8; 33];
             key_bytes.copy_from_slice(&notary_key_bytes);
             PublicKey::Secp256k1(Secp256k1PublicKey(key_bytes))
-        },
-        _ => return Err(anyhow::anyhow!("Unknown key type: {}", notary_key_type))
+        }
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Unknown key type: {}",
+                notary_key_type
+            ))
+        }
     };
 
-    let current_epoch = 1000; // Default epoch - in production would fetch from Gateway API
+    let current_epoch = get_epoch().await?;
 
     let header = TransactionHeaderV1 {
         network_id,
@@ -216,7 +263,9 @@ pub fn prepare_intent_hash() -> Result<()> {
     // For now, just create a placeholder for transaction construction
     // In production, this would use the proper transaction building flow
     println!("⚠️  Note: Full transaction construction not implemented in this function.");
-    println!("   Use the 'submit-trxn' command for complete transaction assembly.");
+    println!(
+        "   Use the 'submit-trxn' command for complete transaction assembly."
+    );
 
     println!("✅ Intent Hash Generated Successfully!");
     println!();
@@ -264,10 +313,15 @@ pub fn sign_intent_hash() -> Result<()> {
 
     // Get private key
     let key_type_clone = key_type.to_string();
-    let private_key_input = Text::new(&format!("Enter your private key (hex format, {} 32 bytes):", key_type))
-        .with_validator(move |input: &str| validate_private_key(input, &key_type_clone))
-        .prompt()
-        .context("Failed to get private key")?;
+    let private_key_input = Text::new(&format!(
+        "Enter your private key (hex format, {} 32 bytes):",
+        key_type
+    ))
+    .with_validator(move |input: &str| {
+        validate_private_key(input, &key_type_clone)
+    })
+    .prompt()
+    .context("Failed to get private key")?;
 
     println!();
     println!("🔄 Signing...");
@@ -377,10 +431,13 @@ pub fn submit_transaction() -> Result<()> {
         println!("--- Signer {} ---", i);
 
         // Get public key for this signer
-        let public_key_input = Text::new(&format!("Enter public key for signer {} (hex format):", i))
-            .with_validator(validate_public_key)
-            .prompt()
-            .context("Failed to get public key")?;
+        let public_key_input = Text::new(&format!(
+            "Enter public key for signer {} (hex format):",
+            i
+        ))
+        .with_validator(validate_public_key)
+        .prompt()
+        .context("Failed to get public key")?;
 
         // Get signature for this signer
         let signature_input = Text::new(&format!("Enter signature from signer {} (hex format):", i))
@@ -434,10 +491,11 @@ pub fn submit_transaction() -> Result<()> {
     }
 
     // Get notary public key
-    let notary_public_key_input = Text::new("Enter the notary public key (hex format):")
-        .with_validator(validate_public_key)
-        .prompt()
-        .context("Failed to get notary public key")?;
+    let notary_public_key_input =
+        Text::new("Enter the notary public key (hex format):")
+            .with_validator(validate_public_key)
+            .prompt()
+            .context("Failed to get notary public key")?;
 
     println!();
     println!("🔄 Constructing notarized transaction...");
@@ -453,7 +511,7 @@ pub fn submit_transaction() -> Result<()> {
     // Create a minimal intent for transaction reconstruction
     // Note: This is a placeholder since we don't have the original manifest
     let _network_definition = NetworkDefinition::mainnet(); // Default to mainnet
-    
+
     let placeholder_intent = IntentV1 {
         header: TransactionHeaderV1 {
             network_id: 1, // Default to mainnet
@@ -489,7 +547,8 @@ pub fn submit_transaction() -> Result<()> {
 
     // Calculate transaction ID (this would be the actual transaction hash)
     // For transaction ID, we'll use a simple hash of the structure
-    let transaction_id = format!("tx_{}", hex::encode(&intent_hash_input.trim()[..16]));
+    let transaction_id =
+        format!("tx_{}", hex::encode(&intent_hash_input.trim()[..16]));
 
     println!("✅ Notarized Transaction Constructed Successfully!");
     println!();

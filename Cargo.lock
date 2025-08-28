@@ -919,6 +919,7 @@ dependencies = [
  "scrypto",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -10,6 +10,9 @@ gateway_api = { path = "../gateway_api" }
 # Interactive CLI
 inquire = "0.7"
 
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
 # Radix dependencies
 scrypto = "1.3.0"
 radix-transactions = "1.3.0"
