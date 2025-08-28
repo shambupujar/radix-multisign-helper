@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gateway_api::get_epoch;
-use inquire::{validator::Validation, Select, Text};
+use inquire::{validator::Validation, Password, Select, Text};
 use radix_transactions::manifest::{compile, BlobProvider};
 use radix_transactions::prelude::*;
 use scrypto::prelude::*;
@@ -197,7 +197,7 @@ fn ask_notary_details(
     match ask_private_key {
         true => {
             let private_key_input =
-                Text::new("Enter the notary private key (hex format):")
+                Password::new("Enter the notary private key (hex format):")
                     .with_validator(move |input: &str| {
                         validate_private_key(input, &notary_key_type)
                     })
@@ -338,7 +338,7 @@ pub fn sign_intent_hash() -> Result<()> {
 
     // Get private key
     let key_type_clone = key_type.to_string();
-    let private_key_input = Text::new(&format!(
+    let private_key_input = Password::new(&format!(
         "Enter your private key (hex format, {} 32 bytes):",
         key_type
     ))
