@@ -559,12 +559,12 @@ pub async fn submit_transaction() -> Result<()> {
     };
 
     // Create notarized transaction
-    let _notarized_transaction = NotarizedTransactionV1 {
+    let notarized_transaction = NotarizedTransactionV1 {
         signed_intent,
         notary_signature,
     };
 
-    let transaction_intent = _notarized_transaction
+    let transaction_intent = notarized_transaction
         .signed_intent
         .prepare(&PreparationSettings::latest())
         .unwrap()
@@ -588,9 +588,48 @@ pub async fn submit_transaction() -> Result<()> {
     println!("  Notary Public Key: {}", notary_public_key_input.trim());
     println!("  Transaction ID: {}", transaction_id);
     println!();
-    println!("⚠️  NOTE: This is a constructed transaction with placeholder notary signature.");
-    println!("   In production, the notary would need to sign the signed intent hash.");
-    println!("   Actual network submission functionality will be added later.");
+
+    let compiled_notarized_transaction =
+        notarized_transaction.to_raw().unwrap().to_vec();
+    let compiled_notarized_transaction_hex =
+        hex::encode(compiled_notarized_transaction);
+    println!(
+        "Compiled Transaction (hex): {}",
+        compiled_notarized_transaction_hex
+    );
+    println!();
+
+    // Ask for confirmation before submitting
+    let confirmation = Select::new(
+        "Do the transaction details above match what you expect and are you ready to submit?",
+        vec!["Yes, submit the transaction", "No, cancel"]
+    )
+    .prompt()
+    .context("Failed to get confirmation")?;
+
+    match confirmation {
+        "Yes, submit the transaction" => {
+            println!("🚀 Submitting transaction...");
+            let result = gateway_api::transaction::submit_gateway_txn(
+                &transaction_id,
+                &compiled_notarized_transaction_hex,
+            )
+            .await;
+            
+            if let Err(e) = result {
+                eprintln!("❌ Failed to submit transaction: {}", e);
+                return Err(anyhow::anyhow!("Transaction submission failed: {}", e));
+            }
+            
+            println!("✅ Transaction submitted successfully!");
+        },
+        "No, cancel" => {
+            println!("❌ Transaction submission cancelled by user.");
+        },
+        _ => {
+            println!("❌ Invalid selection. Transaction cancelled.");
+        }
+    }
 
     Ok(())
 }
