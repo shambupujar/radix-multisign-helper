@@ -476,52 +476,44 @@ pub async fn submit_transaction() -> Result<()> {
         .with_validator(validate_public_key)
         .prompt()
         .context("Failed to get public key")?;
+        let key_type = match hex::decode(public_key_input.trim())?.len() {
+            32 => "Ed25519",
+            33 => "Secp256k1",
+            _ => return Err(anyhow::anyhow!("Invalid public key length")),
+        };
 
-        // Get signature for this signer
-        let signature_input = Text::new(&format!("Enter signature from signer {} (hex format):", i))
-            .with_validator(|input: &str| {
-                let trimmed = input.trim();
-                if trimmed.is_empty() {
-                    return Ok(Validation::Invalid("Signature cannot be empty".into()));
-                }
-                match hex::decode(trimmed) {
-                    Ok(bytes) => {
-                        if bytes.len() == 64 {
-                            Ok(Validation::Valid)
-                        } else {
-                            Ok(Validation::Invalid("Signature must be 64 bytes (Ed25519 only supported for now)".into()))
-                        }
-                    },
-                    Err(_) => Ok(Validation::Invalid("Invalid hex format".into()))
-                }
-            })
-            .prompt()
-            .context("Failed to get signature")?;
+        let signature_input = Text::new(&format!(
+            "Enter signature from signer {} (hex format):",
+            i
+        ))
+        .with_validator(|input: &str| {
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                return Ok(Validation::Invalid(
+                    "Signature cannot be empty".into(),
+                ));
+            }
+            Ok(Validation::Valid)
+        })
+        .prompt()
+        .context("Failed to get signature")?;
 
-        // Parse public key and signature
-        let public_key_bytes = hex::decode(public_key_input.trim())
-            .context("Failed to decode public key")?;
-        let signature_bytes = hex::decode(signature_input.trim())
-            .context("Failed to decode signature")?;
-
-        // Create Ed25519 signature (only Ed25519 supported for now)
-        if public_key_bytes.len() != 32 || signature_bytes.len() != 64 {
-            return Err(anyhow::anyhow!(
-                "Signer {} must use Ed25519 (32-byte key + 64-byte signature). Secp256k1 support will be added later.", 
-                i
-            ));
-        }
-
-        let mut pk_array = [0u8; 32];
-        pk_array.copy_from_slice(&public_key_bytes);
-        let mut sig_array = [0u8; 64];
-        sig_array.copy_from_slice(&signature_bytes);
-
-        let intent_signature =
-            IntentSignatureV1(SignatureWithPublicKeyV1::Ed25519 {
-                public_key: Ed25519PublicKey(pk_array),
-                signature: Ed25519Signature(sig_array),
-            });
+        let intent_signature = match key_type {
+            "Ed25519" => IntentSignatureV1(SignatureWithPublicKeyV1::Ed25519 {
+                public_key: Ed25519PublicKey::from_str(
+                    public_key_input.trim(),
+                )?,
+                signature: Ed25519Signature::from_str(signature_input.trim())?,
+            }),
+            "Secp256k1" => {
+                IntentSignatureV1(SignatureWithPublicKeyV1::Secp256k1 {
+                    signature: Secp256k1Signature::from_str(
+                        signature_input.trim(),
+                    )?,
+                })
+            }
+            _ => return Err(anyhow::anyhow!("Invalid key type")),
+        };
 
         intent_signatures.push(intent_signature);
         println!("✅ Signer {} added successfully", i);
@@ -542,20 +534,27 @@ pub async fn submit_transaction() -> Result<()> {
         },
     };
 
+    // Get the signed intent hash for notarization
+    let signed_intent_hash = signed_intent
+        .prepare(&PreparationSettings::latest())
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to prepare signed intent: {:?}", e)
+        })?
+        .signed_transaction_intent_hash();
+
     // Decode intent hash for notary signing
     let intent_hash_bytes = hex::decode(intent_hash_input.trim())
         .context("Failed to decode intent hash for notary signing")?;
     let mut hash_array = [0u8; 32];
     hash_array.copy_from_slice(&intent_hash_bytes);
-    let hash = Hash(hash_array);
 
     let notary_signature = match notary_private_key.unwrap() {
-        PrivateKey::Ed25519(ed25519_key) => {
-            NotarySignatureV1(SignatureV1::Ed25519(ed25519_key.sign(&hash)))
-        }
-        PrivateKey::Secp256k1(secp256k1_key) => {
-            NotarySignatureV1(SignatureV1::Secp256k1(secp256k1_key.sign(&hash)))
-        }
+        PrivateKey::Ed25519(ed25519_key) => NotarySignatureV1(
+            SignatureV1::Ed25519(ed25519_key.sign(&signed_intent_hash.0)),
+        ),
+        PrivateKey::Secp256k1(secp256k1_key) => NotarySignatureV1(
+            SignatureV1::Secp256k1(secp256k1_key.sign(&signed_intent_hash.0)),
+        ),
     };
 
     // Create notarized transaction
@@ -615,17 +614,20 @@ pub async fn submit_transaction() -> Result<()> {
                 &compiled_notarized_transaction_hex,
             )
             .await;
-            
+
             if let Err(e) = result {
                 eprintln!("❌ Failed to submit transaction: {}", e);
-                return Err(anyhow::anyhow!("Transaction submission failed: {}", e));
+                return Err(anyhow::anyhow!(
+                    "Transaction submission failed: {}",
+                    e
+                ));
             }
-            
+
             println!("✅ Transaction submitted successfully!");
-        },
+        }
         "No, cancel" => {
             println!("❌ Transaction submission cancelled by user.");
-        },
+        }
         _ => {
             println!("❌ Invalid selection. Transaction cancelled.");
         }
