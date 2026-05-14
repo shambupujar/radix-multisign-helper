@@ -117,7 +117,7 @@ pub async fn prepare_intent_hash() -> Result<()> {
     let (notary_public_key, notary_public_key_input, _) =
         ask_notary_details(false).unwrap();
 
-    let (intent, intent_hash_hex, network_definition, current_epoch) =
+    let (intent, intent_hash_hex, network_definition, current_epoch, _network_id) =
         ask_trxn_details(notary_public_key).await?;
 
     let signed_intent = SignedIntentV1 {
@@ -217,7 +217,7 @@ fn ask_notary_details(
 
 async fn ask_trxn_details(
     notary_public_key: PublicKey,
-) -> Result<(IntentV1, String, NetworkDefinition, u64), anyhow::Error> {
+) -> Result<(IntentV1, String, NetworkDefinition, u64, u8), anyhow::Error> {
     let network_id_str = Text::new("Enter network ID:")
         .with_default("1")
         .with_validator(|input: &str| match input.trim().parse::<u8>() {
@@ -236,7 +236,7 @@ async fn ask_trxn_details(
 
     let network_definition = get_network_definition(network_id);
 
-    let start_epoch = ask_epoch().await?;
+    let start_epoch = ask_epoch(network_id).await?;
 
     // Get manifest content - either from file or direct input
     let manifest_input_method = Select::new(
@@ -290,10 +290,10 @@ async fn ask_trxn_details(
         .unwrap()
         .transaction_intent_hash();
     let intent_hash_hex = hex::encode(intent_hash.0);
-    Ok((intent, intent_hash_hex, network_definition, start_epoch))
+    Ok((intent, intent_hash_hex, network_definition, start_epoch, network_id))
 }
 
-async fn ask_epoch() -> Result<u64, anyhow::Error> {
+async fn ask_epoch(network_id: u8) -> Result<u64, anyhow::Error> {
     let epoch_input =
         Text::new("Enter epoch number (leave empty to fetch current epoch. If you are submitting a transaction, you should use the epoch of the transaction that was prepared):")
             .with_default("")
@@ -311,7 +311,7 @@ async fn ask_epoch() -> Result<u64, anyhow::Error> {
             .prompt()
             .context("Failed to get epoch input")?;
     let current_epoch = if epoch_input.trim().is_empty() {
-        get_epoch().await?
+        get_epoch(network_id).await?
     } else {
         epoch_input
             .trim()
@@ -445,7 +445,7 @@ pub async fn submit_transaction() -> Result<()> {
     let (notary_public_key, notary_public_key_input, notary_private_key) =
         ask_notary_details(true).unwrap();
 
-    let (intent, intent_hash_hex, network_definition, current_epoch) =
+    let (intent, intent_hash_hex, network_definition, current_epoch, network_id) =
         ask_trxn_details(notary_public_key).await?;
 
     println!("Constructed Intent Hash: {}", intent_hash_hex);
@@ -585,8 +585,6 @@ pub async fn submit_transaction() -> Result<()> {
         .unwrap()
         .transaction_intent_hash();
 
-    let network_definition = get_network_definition(1);
-
     let transaction_hash_encoder =
         TransactionHashBech32Encoder::new(&network_definition);
     let transaction_id = transaction_hash_encoder
@@ -628,6 +626,7 @@ pub async fn submit_transaction() -> Result<()> {
             let result = gateway_api::transaction::submit_gateway_txn(
                 &transaction_id,
                 &compiled_notarized_transaction_hex,
+                network_id,
             )
             .await;
 

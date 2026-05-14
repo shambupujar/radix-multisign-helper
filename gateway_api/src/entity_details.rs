@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
-use crate::utils::GATEWAY_API_BASE_URL;
+use crate::utils::gateway_base_url;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Entity {}
 
-pub async fn get_validator_details(validator_address: &String) -> reqwest::Result<serde_json::Value> {
+pub async fn get_validator_details(validator_address: &String, network_id: u8) -> reqwest::Result<serde_json::Value> {
+    let base_url = gateway_base_url(network_id);
     let response : serde_json:: Value = reqwest::Client::new()
-        .post(format!("{}/state/entity/details", GATEWAY_API_BASE_URL))
+        .post(format!("{}/state/entity/details", base_url))
         .json(&serde_json::json!({
             "addresses": [
               validator_address
